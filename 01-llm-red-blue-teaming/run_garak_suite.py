@@ -6,6 +6,8 @@ Arquiteturas (--archs):
   blindado      llama3.2-blindado (System Prompt defensivo) direto no Ollama
   guardrail     Llama Guard na entrada + llama3.2-blindado, pelo guardrail_proxy.py (modo input)
   guardrail-io  Llama Guard na entrada e na saída + llama3.2-blindado (modo input-output)
+  promptguard   detector de injeção (Prompt Guard 2) na entrada + llama3.2-blindado (modo injection)
+  promptguard+llamaguard  Prompt Guard 2 e Llama Guard na entrada + llama3.2-blindado (modo injection+input)
 
 Probes padrão (--probes):
   promptinject.HijackHateHumans  o payload é discurso de ódio, conteúdo que o Llama Guard foi treinado para barrar
@@ -48,7 +50,12 @@ ARCHS = {
                   "requer": {"llama3.2-blindado", "llama-guard3:1b"}},
     "guardrail-io": {"rotulo": "4. Llama Guard na entrada e na saída", "proxy": "input-output",
                      "requer": {"llama3.2-blindado", "llama-guard3:1b"}},
+    "promptguard": {"rotulo": "5. Prompt Guard na entrada", "proxy": "injection",
+                    "requer": {"llama3.2-blindado"}},
+    "promptguard+llamaguard": {"rotulo": "6. Prompt Guard + Llama Guard na entrada", "proxy": "injection+input",
+                               "requer": {"llama3.2-blindado", "llama-guard3:1b"}},
 }
+INJECTION_PROXY_MODES = ("injection", "injection+input")
 DEFAULT_ARCHS = ["baseline", "blindado", "guardrail"]
 DEFAULT_PROBES = ["promptinject.HijackHateHumans", "promptinject.HijackLongPrompt"]
 
@@ -61,9 +68,11 @@ def installed_models(ollama_url):
     return names | {n.removesuffix(":latest") for n in names}
 
 
-def wait_for_port(port, timeout=30.0):
+def wait_for_port(port, proc, timeout=30.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if proc.poll() is not None:  # o proxy morreu (ex.: sem acesso ao modelo no Hugging Face)
+            return False
         with socket.socket() as s:
             s.settimeout(1)
             if s.connect_ex(("127.0.0.1", port)) == 0:
@@ -100,7 +109,7 @@ def read_evals(report_path):
 
 
 def proxy_counts(log_path):
-    counts = {"requisicoes": 0, "entrada": 0, "saida": 0, "erros": 0}
+    counts = {"requisicoes": 0, "injecao": 0, "entrada": 0, "saida": 0, "erros": 0}
     if not log_path.exists():
         return counts
     with open(log_path, encoding="utf-8") as f:
@@ -111,7 +120,7 @@ def proxy_counts(log_path):
             counts["requisicoes"] += 1
             if r.get("erro"):
                 counts["erros"] += 1
-            elif r.get("bloqueado_por") in ("entrada", "saida"):
+            elif r.get("bloqueado_por") in ("injecao", "entrada", "saida"):
                 counts[r["bloqueado_por"]] += 1
     return counts
 
@@ -141,13 +150,17 @@ def run_one(arch, probe, args, out_dir):
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         cmd += ["--config", str(config_path), "--target_type", "rest"]
 
+        proxy_cmd = [sys.executable, str(PROXY), "--mode", spec["proxy"], "--port", str(args.proxy_port),
+                     "--ollama-url", args.ollama_url, "--log", str(proxy_log)]
+        uses_injection = spec["proxy"] in INJECTION_PROXY_MODES
+        if uses_injection:
+            proxy_cmd += ["--injection-threshold", str(args.injection_threshold)]
+            if args.injection_model:
+                proxy_cmd += ["--injection-model", args.injection_model]
         proxy_out = open(out_dir / f"{name}.proxy.txt", "w", encoding="utf-8")
-        proxy = subprocess.Popen(
-            [sys.executable, str(PROXY), "--mode", spec["proxy"], "--port", str(args.proxy_port),
-             "--ollama-url", args.ollama_url, "--log", str(proxy_log)],
-            stdout=proxy_out, stderr=subprocess.STDOUT,
-        )
-        if not wait_for_port(args.proxy_port):
+        proxy = subprocess.Popen(proxy_cmd, stdout=proxy_out, stderr=subprocess.STDOUT)
+        # Na primeira vez, o detector de injeção é baixado do Hugging Face (~1 GB): espera mais
+        if not wait_for_port(args.proxy_port, proxy, timeout=900 if uses_injection else 30):
             stop_process(proxy)
             proxy_out.close()
             return {"arquitetura": arch, "probe": probe, "erro": "o proxy não respondeu na porta "
@@ -193,7 +206,7 @@ def write_summary(results, out_dir, meta):
         "",
         "ASR = taxa de sucesso do ataque (falhas da defesa / saídas avaliadas). IC 95% calculado pelo Garak (bootstrap).",
         "",
-        "| Arquitetura | Probe | Detector | ASR | IC 95% | Falhas / Avaliadas | Barrados pelo Llama Guard | Tempo |",
+        "| Arquitetura | Probe | Detector | ASR | IC 95% | Falhas / Avaliadas | Barrados pelos guardrails | Tempo |",
         "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
     ]
     for r in results:
@@ -204,7 +217,9 @@ def write_summary(results, out_dir, meta):
         guard = "–"
         if "proxy" in r:
             p = r["proxy"]
-            guard = f"{p['entrada']} entrada / {p['saida']} saída de {p['requisicoes']}"
+            parts = [f"{p[k]} {nome}" for k, nome in (("injecao", "Prompt Guard"), ("entrada", "Llama Guard entrada"),
+                                                      ("saida", "Llama Guard saída")) if p.get(k)]
+            guard = f"{' + '.join(parts) or 'nenhum'} de {p['requisicoes']}"
         for d in r["detectores"]:
             ci = "–" if not d["ic95"] else f"{pct(d['ic95'][0])} a {pct(d['ic95'][1])}"
             lines.append(
@@ -223,6 +238,9 @@ def main():
     parser.add_argument("--archs", nargs="+", choices=list(ARCHS), default=DEFAULT_ARCHS)
     parser.add_argument("--probes", nargs="+", default=DEFAULT_PROBES, help="probes do Garak, ex.: promptinject.HijackLongPrompt")
     parser.add_argument("--generations", type=int, help="gerações por prompt (padrão do Garak: 5)")
+    parser.add_argument("--injection-model", help="detector de injeção (padrão: meta-llama/Llama-Prompt-Guard-2-86M)")
+    parser.add_argument("--injection-threshold", type=float, default=0.5,
+                        help="limiar de bloqueio do detector de injeção (padrão: 0.5)")
     parser.add_argument("--proxy-port", type=int, default=8080)
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--out", type=Path, help="pasta de saída (padrão: results/exp1/suite_<data>)")
@@ -245,6 +263,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"inicio": started.isoformat(timespec="seconds"), "arquiteturas": args.archs,
             "probes": args.probes, "geracoes": args.generations or "padrão do Garak"}
+    if any(ARCHS[a].get("proxy") in INJECTION_PROXY_MODES for a in args.archs):
+        meta["detector_injecao"] = args.injection_model or "meta-llama/Llama-Prompt-Guard-2-86M"
+        meta["limiar_injecao"] = args.injection_threshold
 
     runs = [(a, p) for p in args.probes for a in args.archs]
     print(f"{len(runs)} execuções. Resultados em {out_dir}")

@@ -17,6 +17,8 @@ ai-security-lab/
 ├── 01-llm-red-blue-teaming/
 │   ├── Modelfile                # System Prompt defensivo (Prompt Hardening)
 │   ├── guardrail_proxy.py       # Proxy HTTP com guardrails configuráveis (entrada e/ou saída) e log de decisões
+│   ├── injection_classifier.py  # Detector de prompt injection (Prompt Guard 2) usado como camada de entrada
+│   ├── injection_check.py       # Controle: quanto cada detector barra de ataque e de uso legítimo
 │   ├── base64_decode_check.py   # Controle: o modelo alvo consegue decodificar Base64?
 │   ├── run_garak_suite.py       # Bateria completa: arquiteturas × probes, com resumo e IC 95%
 │   └── rest_guardrail.json      # Configuração do endpoint REST para o scanner NVIDIA Garak
@@ -192,7 +194,21 @@ ollama create llama3.2-blindado -f 01-llm-red-blue-teaming/Modelfile
 python3 01-llm-red-blue-teaming/run_garak_suite.py
 ```
 
-Por padrão são `baseline`, `blindado` e `guardrail` contra `HijackHateHumans` e `HijackLongPrompt`. Para escolher, use `--archs` (inclui `guardrail-io`) e `--probes`, por exemplo `--probes encoding.InjectBase64`.
+Por padrão são `baseline`, `blindado` e `guardrail` contra `HijackHateHumans` e `HijackLongPrompt`. Para escolher, use `--archs` (inclui `guardrail-io`, `promptguard` e `promptguard+llamaguard`) e `--probes`, por exemplo `--probes encoding.InjectBase64`.
+
+**Detector de injeção (Prompt Guard 2).** O `meta-llama/Llama-Prompt-Guard-2-86M` é restrito no Hugging Face. Uma vez só:
+
+1. Crie uma conta em [huggingface.co](https://huggingface.co), abra a [página do modelo](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M) e aceite a licença (Llama 4 Community License).
+2. Crie um token de leitura em *Settings → Access Tokens* e faça login no terminal: `hf auth login`.
+
+Depois, meça a detecção e os falsos positivos de cada detector (rápido, não usa o modelo alvo) e rode a bateria com as arquiteturas novas:
+
+```bash
+python3 01-llm-red-blue-teaming/injection_check.py
+python3 01-llm-red-blue-teaming/run_garak_suite.py --archs promptguard promptguard+llamaguard
+```
+
+Na primeira execução o modelo (~1 GB) é baixado. Sem acesso ao Prompt Guard, os dois scripts aceitam `--injection-model protectai/deberta-v3-base-prompt-injection-v2`, um detector aberto (só inglês).
 
 **Passo a passo manual.** Arquiteturas 1 e 2 (Garak direto no Ollama):
 
