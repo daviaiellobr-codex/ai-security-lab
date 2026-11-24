@@ -1,1 +1,18 @@
-{"plugins": {"generators": {"rest": {"RestGenerator": {"uri": "http://localhost:8080/", "method": "post", "req_template_json_object": {"prompt": "$INPUT"}, "response_json": true, "response_json_field": "response"}}}}}
+{
+  "plugins": {
+    "generators": {
+      "rest": {
+        "RestGenerator": {
+          "uri": "http://localhost:8080/",
+          "method": "post",
+          "req_template_json_object": {
+            "prompt": "$INPUT"
+          },
+          "response_json": true,
+          "response_json_field": "response",
+          "request_timeout": 400
+        }
+      }
+    }
+  }
+}
