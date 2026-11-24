@@ -271,8 +271,9 @@ O Garak salva os relatórios em `~/.local/share/garak/garak_runs/` (o caminho ap
 ### Experimento 2 (Network IDS)
 
 ```bash
-python3 02-network-ids-adversarial-ml/ids_ml_lab.py           # configuração das tabelas acima
-python3 02-network-ids-adversarial-ml/ids_ml_lab.py --dedup   # sem conexões duplicadas
+python3 02-network-ids-adversarial-ml/ids_ml_lab.py                        # subset SA
+python3 02-network-ids-adversarial-ml/ids_ml_lab.py --dedup                # subset SA sem duplicatas
+python3 02-network-ids-adversarial-ml/ids_ml_lab.py --subset full --dedup  # KDD99 10% completo, sem duplicatas
 ```
 
-As métricas ficam em `results/exp2/ids_results.json` e `results/exp2/ids_results_dedup.json`.
+As métricas ficam em `results/exp2/`, num arquivo por configuração (`ids_results.json`, `ids_results_dedup.json`, `ids_results_full_dedup.json`).

@@ -9,12 +9,14 @@ Etapas:
        - falsos positivos no tráfego normal limpo;
        - uma perturbação diferente da usada no treino (o ganho generaliza?);
        - um teste de atalho (o modelo decorou o valor src_bytes = 250?);
+       - uma evasão realista, em que o atacante só desacelera (muda o ritmo, não o conteúdo);
        - resultados por categoria de ataque (DoS, Probe, R2L, U2R).
   5. Salva as métricas e a feature importance em results/exp2/.
 
 Uso (a partir da raiz do repositório):
-  python3 02-network-ids-adversarial-ml/ids_ml_lab.py           # mesma configuração do README
-  python3 02-network-ids-adversarial-ml/ids_ml_lab.py --dedup   # remove conexões duplicadas antes do split
+  python3 02-network-ids-adversarial-ml/ids_ml_lab.py                        # subset SA (padrão)
+  python3 02-network-ids-adversarial-ml/ids_ml_lab.py --dedup                # sem conexões duplicadas
+  python3 02-network-ids-adversarial-ml/ids_ml_lab.py --subset full --dedup  # KDD99 10% completo
 """
 
 import argparse
@@ -44,11 +46,16 @@ CATEGORIES = ["DoS", "Probe", "R2L", "U2R"]
 
 # --------------------------------------------------------------------------- dados
 
-def load_data(dedup, seed):
-    print("1. Carregando dataset de tráfego de rede (KDD99 10%, subset SA)...")
-    # O subset SA junta todo o tráfego normal com 3377 ataques SORTEADOS (com reposição).
-    # Sem random_state, cada execução sorteia ataques diferentes e os resultados mudam.
-    data = fetch_kddcup99(subset="SA", percent10=True, as_frame=True, random_state=seed)
+def load_data(dedup, seed, subset):
+    if subset == "SA":
+        print("1. Carregando dataset de tráfego de rede (KDD99 10%, subset SA)...")
+        # O subset SA junta todo o tráfego normal com 3377 ataques SORTEADOS (com reposição).
+        # Sem random_state, cada execução sorteia ataques diferentes e os resultados mudam.
+        data = fetch_kddcup99(subset="SA", percent10=True, as_frame=True, random_state=seed)
+    else:
+        # A versão 10% completa tem todos os ataques: milhares de Probe e R2L, não só DoS
+        print("1. Carregando dataset de tráfego de rede (KDD99 10% completo)...")
+        data = fetch_kddcup99(subset=None, percent10=True, as_frame=True)
     df = data.frame.copy()
 
     n_total = len(df)
@@ -69,7 +76,8 @@ def load_data(dedup, seed):
     category = labels.map(lambda l: "Normal" if l == "normal" else ATTACK_CATEGORY.get(l, "Outro"))
     X = df.drop(columns=["labels"]).astype(float)
 
-    info = {"conexoes": n_total, "duplicatas": n_dup, "dedup": dedup, "conexoes_usadas": len(df)}
+    info = {"subset": subset, "conexoes": n_total, "duplicatas": n_dup, "dedup": dedup,
+            "conexoes_usadas": len(df)}
     return X, y, category, info
 
 
@@ -108,6 +116,20 @@ def low_and_slow_random(X, rng):
     return Xp
 
 
+def slow_down_only(X):
+    """Evasão realista: o atacante só desacelera.
+
+    Muda apenas as contagens da janela de 2 segundos ('count', 'srv_count'), que dependem do
+    ritmo das conexões. Não toca em bytes nem em taxas de erro, que dependem do conteúdo e do
+    comportamento do ataque. Para um scan (Probe) ou uma tentativa de senha (R2L), ir devagar
+    mantém o ataque funcionando; para um DoS por volume, não.
+    """
+    Xp = X.copy()
+    Xp["count"] = np.clip(Xp["count"].to_numpy() * 0.02, 1, 5)
+    Xp["srv_count"] = np.clip(Xp["srv_count"].to_numpy() * 0.02, 1, 5)
+    return Xp
+
+
 # ---------------------------------------------------------------------- métricas
 
 def pct(part, whole):
@@ -143,11 +165,13 @@ def main():
     parser = argparse.ArgumentParser(description="Experimento 2: evasão e Adversarial Training em um IDS.")
     parser.add_argument("--dedup", action="store_true",
                         help="remove conexões duplicadas antes de separar treino e teste")
+    parser.add_argument("--subset", choices=["SA", "full"], default="SA",
+                        help="SA: tráfego normal + 3377 ataques sorteados (padrão); full: KDD99 10%% completo")
     parser.add_argument("--seed", type=int, default=42,
                         help="semente do sorteio de ataques do dataset, do split e dos modelos (padrão: 42)")
     args = parser.parse_args()
 
-    X, y, category, dataset_info = load_data(args.dedup, args.seed)
+    X, y, category, dataset_info = load_data(args.dedup, args.seed, args.subset)
     X_train, X_test, y_train, y_test, cat_train, cat_test = train_test_split(
         X, y, category, test_size=0.25, random_state=args.seed, stratify=y
     )
@@ -190,6 +214,7 @@ def main():
     print("\n5. Avaliando se o ganho do Adversarial Training é real...")
     rng = np.random.default_rng(args.seed)
     X_evasion_random = low_and_slow_random(X_attacks, rng)
+    X_evasion_rate = slow_down_only(X_attacks)
 
     # Teste de atalho: tráfego NORMAL com src_bytes = 250 (o valor fixo usado no treino adversarial).
     # Se o modelo blindado passar a acusar essas conexões, ele decorou o valor em vez de aprender o padrão.
@@ -204,6 +229,7 @@ def main():
             "deteccao_ataques_originais": detection_rate(model, X_attacks),
             "deteccao_evasao_fixa": detection_rate(model, X_evasion),
             "deteccao_evasao_aleatoria": detection_rate(model, X_evasion_random),
+            "deteccao_so_desacelerar": detection_rate(model, X_evasion_rate),
             "falsos_positivos_normal_src_bytes_250": detection_rate(model, X_shortcut),
         }
 
@@ -212,6 +238,7 @@ def main():
         ("Taxa de falsos positivos (tráfego limpo)", lambda s: s["trafego_limpo"]["taxa_falsos_positivos"]),
         ("Detecção: evasão fixa (vista no treino)", lambda s: s["deteccao_evasao_fixa"]),
         ("Detecção: evasão aleatória (nunca vista)", lambda s: s["deteccao_evasao_aleatoria"]),
+        ("Detecção: só desacelerar (evasão realista)", lambda s: s["deteccao_so_desacelerar"]),
         ("Falsos positivos: normal com src_bytes=250", lambda s: s["falsos_positivos_normal_src_bytes_250"]),
     ]
     print(f"\n   {'Métrica':<44}{'Original':>10}{'Blindado':>10}")
@@ -221,12 +248,14 @@ def main():
     # --- RESULTADOS POR CATEGORIA DE ATAQUE ---
     print("\n6. Resultados por categoria de ataque (detecção, %)")
     print("   DoS por volume (smurf, neptune...) deixa de ser DoS quando a taxa de conexões cai para 1-5:")
-    print("   nessa linha, a 'evasão' descreve um ataque que não funcionaria mais.\n")
+    print("   nessa linha, a 'evasão' descreve um ataque que não funcionaria mais.")
+    print("   'Ritmo' = o atacante só desacelera, sem mudar bytes nem erros (evasão realista para Probe e R2L).\n")
     groups = [(cat, cat_attacks == cat) for cat in CATEGORIES]
     groups.append(("Sem DoS", cat_attacks != "DoS"))
 
     per_category = []
-    print(f"   {'Categoria':<10}{'n':>6}{'Original':>10}{'Orig.+evasão':>14}{'Blind.+fixa':>13}{'Blind.+aleat.':>15}")
+    print(f"   {'Categoria':<10}{'n':>7}{'Original':>10}{'Orig.+fixa':>12}{'Orig.+ritmo':>13}"
+          f"{'Blind.+fixa':>13}{'Blind.+aleat.':>15}{'Blind.+ritmo':>14}")
     for cat, mask in groups:
         row = {
             "categoria": cat,
@@ -235,10 +264,13 @@ def main():
             "original_evasao_fixa": detection_rate(clf, X_evasion[mask]),
             "blindado_evasao_fixa": detection_rate(clf_hardened, X_evasion[mask]),
             "blindado_evasao_aleatoria": detection_rate(clf_hardened, X_evasion_random[mask]),
+            "original_so_desacelerar": detection_rate(clf, X_evasion_rate[mask]),
+            "blindado_so_desacelerar": detection_rate(clf_hardened, X_evasion_rate[mask]),
         }
         per_category.append(row)
-        print(f"   {cat:<10}{row['n']:>6}{fmt(row['original_limpo']):>10}{fmt(row['original_evasao_fixa']):>14}"
-              f"{fmt(row['blindado_evasao_fixa']):>13}{fmt(row['blindado_evasao_aleatoria']):>15}")
+        print(f"   {cat:<10}{row['n']:>7}{fmt(row['original_limpo']):>10}{fmt(row['original_evasao_fixa']):>12}"
+              f"{fmt(row['original_so_desacelerar']):>13}{fmt(row['blindado_evasao_fixa']):>13}"
+              f"{fmt(row['blindado_evasao_aleatoria']):>15}{fmt(row['blindado_so_desacelerar']):>14}")
 
     # --- FEATURE IMPORTANCE ---
     print("\n7. Feature importance (top 10 do modelo original)")
@@ -256,10 +288,12 @@ def main():
 
     # --- SALVANDO RESULTADOS ---
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_file = RESULTS_DIR / ("ids_results_dedup.json" if args.dedup else "ids_results.json")
+    name = "ids_results" + ("_full" if args.subset == "full" else "") + ("_dedup" if args.dedup else "")
+    out_file = RESULTS_DIR / f"{name}.json"
     results = {
         "config": {
             "seed": args.seed,
+            "subset": args.subset,
             "dedup": args.dedup,
             "n_estimators": 100,
             "test_size": 0.25,
