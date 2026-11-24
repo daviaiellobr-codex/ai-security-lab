@@ -6,7 +6,7 @@ Repositório de estudos práticos na interseção entre **Ciência de Dados** e 
 
 * **Moderação de conteúdo não é defesa contra prompt injection, e um detector de injeção sozinho também não basta.** O Llama Guard 3 barrou 100% de uma injeção com payload de ódio, mas só 14,4% da mesma injeção com payload neutro (49,61% de sucesso do ataque). O Prompt Guard 2, feito para detectar injeção, zerou o payload neutro, mas deixou passar parte do de ódio. Juntos, zeraram os dois ataques, ao custo de barrar 11,8% dos prompts legítimos do teste.
 * **Controles mudam conclusões.** A aparente defesa do modelo contra payloads em Base64 vinha da incapacidade de decodificá-los (0/20 frases inofensivas), e não do *prompt hardening*.
-* **Duplicatas no KDD Cup 99 inflam a fragilidade de um IDS.** A evasão *Low-and-Slow* passou por 93,84% das detecções com duplicatas e por 34,66% sem elas. Com duplicatas, o *Adversarial Training* perdeu 11 pontos contra perturbações não vistas no treino.
+* **A fragilidade do IDS vinha dos dados, não do modelo.** A evasão *Low-and-Slow* passou por 93,84% das detecções num recorte do KDD Cup 99 dominado por ataques DoS duplicados, por 34,66% sem as duplicatas e por só 3,81% no conjunto completo sem duplicatas. Uma versão realista do ataque, em que o atacante só desacelera, passou por 0,24%.
 
 ---
 
@@ -103,21 +103,24 @@ Os modelos não recusam: eles inventam um texto qualquer. Para a frase codificad
 
 ## 🌐 Experimento 2: Adversarial Machine Learning em Detecção de Intrusão (Network IDS)
 
-Treinamento de um classificador **Random Forest** sobre tráfego de rede (**KDD Cup 99**, subset `SA`) seguido de simulação de ataque de evasão (*Low-and-Slow*) e mitigação via **Adversarial Training**.
+Treinamento de um classificador **Random Forest** sobre tráfego de rede (**KDD Cup 99**) seguido de simulação de ataque de evasão (*Low-and-Slow*) e mitigação via **Adversarial Training**, em três recortes dos dados: o subset `SA` (todo o tráfego normal e 3377 ataques sorteados) com e sem duplicatas, e a versão 10% completa sem duplicatas.
 
 ### Resultados (semente 42)
 
-| Métrica | Com duplicatas (padrão) | Sem duplicatas (`--dedup`) |
-| :--- | :---: | :---: |
-| Conexões no teste (ataques) | 25.164 (844) | 22.209 (251) |
-| **Original:** Recall em tráfego limpo | 99,29% | 98,41% |
-| **Original:** detecção sob evasão *Low-and-Slow* | **6,16%** (93,84% evadidos) | **65,34%** (34,66% evadidos) |
-| **Blindado:** Recall em tráfego limpo | 99,41% | 98,41% |
-| **Blindado:** detecção sob a evasão vista no treino | 99,29% | 98,01% |
-| **Blindado:** detecção sob evasão com valores novos | **88,63%** | **97,21%** |
-| Falsos positivos em tráfego limpo (original → blindado) | 0,00% → 0,00% | 0,00% → 0,00% |
-| Falsos positivos no teste de atalho: tráfego normal com `src_bytes = 250` (blindado) | 0,00% | 0,00% |
-| Peso de `count` + `srv_count` (original → blindado) | 43,17% → 30,97% | 10,85% → 7,89% |
+| Métrica | SA com duplicatas | SA sem duplicatas | **10% completo sem duplicatas** |
+| :--- | :---: | :---: | :---: |
+| Conexões no teste (ataques) | 25.164 (844) | 22.209 (251) | 36.397 (14.439) |
+| **Original:** Recall em tráfego limpo | 99,29% | 98,41% | 99,89% |
+| **Original:** detecção sob evasão *Low-and-Slow* | **6,16%** (93,84% evadidos) | **65,34%** (34,66% evadidos) | **96,19%** (3,81% evadidos) |
+| **Original:** detecção quando o atacante só desacelera | – | – | **99,76%** (0,24% evadidos) |
+| **Blindado:** Recall em tráfego limpo | 99,41% | 98,41% | 99,90% |
+| **Blindado:** detecção sob a evasão vista no treino | 99,29% | 98,01% | 99,90% |
+| **Blindado:** detecção sob evasão com valores novos | **88,63%** | **97,21%** | **99,81%** |
+| Falsos positivos em tráfego limpo (original → blindado) | 0,00% → 0,00% | 0,00% → 0,00% | 0,02% → 0,02% |
+| Falsos positivos no teste de atalho: tráfego normal com `src_bytes = 250` (blindado) | 0,00% | 0,00% | **0,41%** |
+| Peso de `count` + `srv_count` (original → blindado) | 43,17% → 30,97% | 10,85% → 7,89% | 8,74% → 2,06% |
+
+A evasão *Low-and-Slow* reduz a taxa de conexões **e** fixa bytes e taxas de erro. A evasão "só desacelerar" muda apenas o ritmo (`count` e `srv_count`), que é o que um atacante consegue fazer sem alterar o próprio ataque. Ela só foi medida no conjunto completo, onde há ataques não-DoS em número suficiente.
 
 > Versões anteriores deste README traziam números de uma execução sem semente no sorteio de ataques do subset `SA` (o scikit-learn sorteia 3377 ataques com reposição a cada carregamento), por isso diferem destes. Os arquivos completos estão em `results/exp2/`.
 
@@ -132,31 +135,33 @@ Treinamento de um classificador **Random Forest** sobre tráfego de rede (**KDD 
 | `same_srv_rate` | 0.0570 | **0.0571** |
 | `dst_host_same_src_port_rate` | 0.0563 | **0.0710** |
 
-Sem duplicatas, o modelo original passa a se apoiar principalmente em `same_srv_rate` (0.1702) e nas taxas de erro SYN (`dst_host_serror_rate`, `srv_serror_rate`, `dst_host_srv_serror_rate`, `serror_rate`), e `count` cai para 0.0782.
+No SA sem duplicatas, o modelo original passa a se apoiar principalmente em `same_srv_rate` (0.1702) e nas taxas de erro SYN (`dst_host_serror_rate`, `srv_serror_rate`, `dst_host_srv_serror_rate`, `serror_rate`), e `count` cai para 0.0782. No 10% completo sem duplicatas, os atributos mais importantes são `same_srv_rate` (0.1241) e `src_bytes` (0.1216), e `count` + `srv_count` somam só 8,74%.
 
-### Por categoria de ataque (com duplicatas)
+### Por categoria de ataque (10% completo, sem duplicatas)
 
-| Categoria | Ataques no teste | Original | Original + evasão | Blindado + valores novos |
-| :--- | :---: | :---: | :---: | :---: |
-| DoS | 830 | 99,76% | 5,30% | 88,92% |
-| Probe | 11 | 90,91% | 72,73% | 90,91% |
-| R2L | 3 | 0,00% | 0,00% | 0,00% |
-| U2R | 0 | – | – | – |
+| Categoria | Ataques no teste | Original | Original + *Low-and-Slow* | Original + só desacelerar | Blindado + valores novos |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| DoS | 13.636 | 100,00% | 96,65% | 99,88% | 99,93% |
+| Probe | 514 | 99,22% | 85,41% | 98,83% | 99,22% |
+| R2L | 273 | 97,44% | 95,97% | 97,44% | 96,70% |
+| U2R | 16 | 68,75% | 56,25% | 68,75% | 68,75% |
+
+No subset `SA`, 830 dos 844 ataques do teste eram DoS, o que impedia essa análise.
 
 **Principais conclusões:**
-* **Acurácia alta mascara fragilidade:** com **99,98% de acurácia**, o modelo concentra **43%** da decisão em `count` e `srv_count`, e a evasão *Low-and-Slow* passa por **93,84%** das detecções.
-* **As duplicatas inflam a fragilidade, não só as métricas:** sem elas, o peso de `count` + `srv_count` cai para 11%, o modelo passa a usar taxas de erro SYN e `same_srv_rate`, e a evasão cai para 34,66%. Boa parte da dependência de volume vinha de cópias dos mesmos ataques DoS.
-* **O Adversarial Training funciona, mas generaliza menos do que parece:** com duplicatas, a detecção cai de 99,29% na perturbação vista no treino para **88,63%** com valores novos. Sem duplicatas, a queda é pequena (98,01% → 97,21%).
-* **O modelo blindado não decorou o valor da perturbação** (0,00% no teste de atalho), e o hardening não aumentou os falsos positivos em tráfego limpo.
-* **Na prática, o experimento mede DoS:** 830 dos 844 ataques do teste são DoS. Com só 14 ataques de outras categorias, não dá para concluir nada sobre Probe, R2L ou U2R. Além disso, a evasão que derruba a taxa de conexões de um DoS por volume descreve um ataque que deixaria de funcionar.
+* **Acurácia alta mascarava uma fragilidade, mas ela vinha dos dados.** No subset `SA` com duplicatas, com 99,98% de acurácia, o modelo concentrava 43% da decisão em `count` e `srv_count`, e a evasão *Low-and-Slow* passava por 93,84% das detecções. Esse recorte é quase só DoS, com muitas cópias dos mesmos ataques.
+* **Com dados mais representativos, a evasão quase não funciona.** Sem duplicatas, a evasão caiu para 34,66%. No 10% completo sem duplicatas, que tem ataques variados no treino, o peso de `count` + `srv_count` cai para 8,74%, e a mesma evasão passou por só 3,81% das detecções.
+* **A evasão realista praticamente não engana o detector.** Quando o atacante só desacelera, sem mexer em bytes nem em erros, passaram 0,24% dos ataques. Em Probe, a detecção foi de 99,22% para 98,83%; em R2L, não mudou (97,44%). A evasão *Low-and-Slow* original funcionava melhor porque alterava também atributos que um ataque real não controla.
+* **O Adversarial Training ajudou pouco onde havia pouco a ganhar e mostrou um efeito colateral.** No conjunto completo, levou a detecção a 99,90% e generalizou para valores novos (99,81%), mas passou a acusar 0,41% das conexões normais com `src_bytes = 250`: um sinal de que ele aprende o valor da perturbação como assinatura. No SA com duplicatas, perdeu 11 pontos contra valores novos (99,29% → 88,63%).
+* **U2R continua sem amostra suficiente:** são 16 ataques no teste, com 68,75% de detecção já no tráfego limpo.
 
 ---
 
 ## ⚠️ Limitações
 
-* **KDD Cup 99 é antigo e tem muitos registros duplicados** (Tavallaee et al., *A Detailed Analysis of the KDD CUP 99 Data Set*, 2009). Aqui, 11,7% das conexões são duplicatas exatas, e o próprio subset `SA` sorteia os ataques com reposição: sem duplicatas, os ataques no teste caem de 844 para 251. Como isso muda as conclusões, os resultados trazem as duas configurações. NSL-KDD, UNSW-NB15 e CIC-IDS2017 são alternativas mais atuais.
-* **Ataque no espaço de features:** a evasão altera os valores da tabela diretamente, sem garantir que exista tráfego real com aqueles valores nem que o ataque continue funcionando. Em DoS por volume (`smurf`, `neptune`), reduzir a taxa de conexões desfaz o próprio ataque.
-* **Base desbalanceada:** o subset `SA` (versão 10%) tem cerca de 3,4% de ataques (844 de 25.164 conexões no teste), então acurácia sozinha diz pouco. Por isso o foco em Recall e falsos positivos.
+* **KDD Cup 99 é antigo e tem muitos registros duplicados** (Tavallaee et al., *A Detailed Analysis of the KDD CUP 99 Data Set*, 2009). No subset `SA`, 11,7% das conexões são duplicatas exatas (e o próprio subset sorteia os ataques com reposição); na versão 10% completa, 70,5%. Como isso muda as conclusões, os resultados trazem as configurações com e sem duplicatas. NSL-KDD, UNSW-NB15 e CIC-IDS2017 são alternativas mais atuais.
+* **Ataque no espaço de features:** as evasões alteram os valores da tabela diretamente, sem gerar tráfego real. A versão "só desacelerar" é a mais próxima do possível, mas ainda supõe que reduzir o ritmo mexe só em `count` e `srv_count`. Em DoS por volume (`smurf`, `neptune`), desacelerar desfaz o próprio ataque.
+* **Bases desbalanceadas:** o subset `SA` tem cerca de 3,4% de ataques (844 de 25.164 conexões no teste) e a versão 10% completa sem duplicatas, cerca de 40% (14.439 de 36.397), então acurácia sozinha diz pouco. Por isso o foco em Recall e falsos positivos.
 * **Escopo do Experimento 1:** modelos locais pequenos (3B e 1B) e três probes do Garak (dois payloads do `promptinject` e o `InjectBase64`). Os números não se estendem automaticamente a modelos maiores ou a outras técnicas de injeção.
 * **Controle de falsos positivos pequeno e sintético:** 8 frases × 35 tarefas, em inglês. As taxas indicam a ordem de grandeza do custo, não o comportamento com usuários reais.
 
