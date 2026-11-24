@@ -1,6 +1,11 @@
 venv/
 __pycache__/
-*.jsonl
-*.html
 *.log
 .ipynb_checkpoints/
+
+# Relatórios e logs soltos ficam fora do repositório...
+*.jsonl
+*.html
+# ...exceto os que forem guardados em results/ como evidência dos experimentos
+!results/**/*.jsonl
+!results/**/*.html
