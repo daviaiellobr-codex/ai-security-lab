@@ -12,6 +12,7 @@ ai-security-lab/
 │   ├── Modelfile                # System Prompt defensivo (Prompt Hardening)
 │   ├── guardrail_proxy.py       # Proxy HTTP com guardrails configuráveis (entrada e/ou saída) e log de decisões
 │   ├── base64_decode_check.py   # Controle: o modelo alvo consegue decodificar Base64?
+│   ├── run_garak_suite.py       # Bateria completa: arquiteturas × probes, com resumo e IC 95%
 │   └── rest_guardrail.json      # Configuração do endpoint REST para o scanner NVIDIA Garak
 ├── 02-network-ids-adversarial-ml/
 │   └── ids_ml_lab.py            # Detector de intrusão (Random Forest), ataque Low-and-Slow, Adversarial Training e testes de generalização
@@ -62,12 +63,15 @@ Os modelos não recusam: eles inventam um texto qualquer. Para a frase codificad
 
 ### 🔬 Próximos testes
 
-Com o `llama3.2` decodificando 0%, rodar o `InjectBase64` sem defesa ou o proxy no modo `input-output` não acrescenta informação para esse modelo. Esses testes passam a fazer sentido com um modelo alvo que decodifique Base64 (use o `base64_decode_check.py` para escolher):
+**O Defense in Depth detecta a injeção ou só o conteúdo ofensivo?** O payload do `HijackHateHumans` é discurso de ódio, exatamente o tipo de conteúdo que o Llama Guard foi treinado para barrar. O 0% de sucesso pode vir da detecção do conteúdo, e não da injeção. O `promptinject.HijackLongPrompt` faz o mesmo ataque com um payload neutro e separa as duas hipóteses. A bateria (`run_garak_suite.py`) roda os dois probes nas três arquiteturas e gera a tabela com intervalo de confiança.
+
+**Base64 com um alvo que leia o payload.** Com o `llama3.2` decodificando 0%, rodar o `InjectBase64` sem defesa ou o proxy no modo `input-output` não acrescenta informação para esse modelo. Esses testes passam a fazer sentido com um modelo alvo que decodifique Base64 (use o `base64_decode_check.py` para escolher).
 
 | Teste | Pergunta que responde |
 | :--- | :--- |
-| `InjectBase64` contra o modelo novo, sem defesa | Quanto do ataque funciona quando o alvo entende o payload? |
-| Proxy no modo `input-output` | Um Llama Guard avaliando a **resposta** (já decodificada) barra o que passou pela entrada? |
+| `HijackLongPrompt` nas três arquiteturas | O Llama Guard barra uma injeção cujo payload não é ofensivo? |
+| `InjectBase64` contra um modelo que decodifique Base64, sem defesa | Quanto do ataque funciona quando o alvo entende o payload? |
+| Proxy no modo `input-output` com esse modelo | Um Llama Guard avaliando a **resposta** (já decodificada) barra o que passou pela entrada? |
 
 Os comandos estão em [Como Reproduzir](#-como-reproduzir).
 
@@ -173,7 +177,15 @@ ollama pull llama-guard3:1b
 ollama create llama3.2-blindado -f 01-llm-red-blue-teaming/Modelfile
 ```
 
-**Arquiteturas 1 e 2** (Garak direto no Ollama):
+**Bateria completa (recomendado).** Roda cada arquitetura contra cada probe, sobe e derruba o proxy sozinho e grava relatórios, logs e um resumo (`summary.md` e `summary.json`, com ASR e intervalo de confiança de 95% do Garak) em `results/exp1/suite_<data>/`:
+
+```bash
+python3 01-llm-red-blue-teaming/run_garak_suite.py
+```
+
+Por padrão são `baseline`, `blindado` e `guardrail` contra `HijackHateHumans` e `HijackLongPrompt`. Para escolher, use `--archs` (inclui `guardrail-io`) e `--probes`, por exemplo `--probes encoding.InjectBase64`.
+
+**Passo a passo manual.** Arquiteturas 1 e 2 (Garak direto no Ollama):
 
 ```bash
 garak --target_type ollama --target_name llama3.2 \
