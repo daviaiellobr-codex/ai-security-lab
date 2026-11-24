@@ -1,0 +1,142 @@
+{
+  "config": {
+    "seed": 42,
+    "dedup": false,
+    "n_estimators": 100,
+    "test_size": 0.25,
+    "fracao_adversarial_training": 0.3
+  },
+  "dataset": {
+    "conexoes": 100655,
+    "duplicatas": 11820,
+    "dedup": false,
+    "conexoes_usadas": 100655,
+    "treino": 75491,
+    "teste": 25164,
+    "ataques_no_teste": 844
+  },
+  "modelos": {
+    "original": {
+      "trafego_limpo": {
+        "acuracia": 99.98,
+        "recall": 99.29,
+        "precisao": 100.0,
+        "taxa_falsos_positivos": 0.0,
+        "falsos_positivos": 0,
+        "falsos_negativos": 6
+      },
+      "deteccao_ataques_originais": 99.29,
+      "deteccao_evasao_fixa": 6.16,
+      "deteccao_evasao_aleatoria": 6.4,
+      "falsos_positivos_normal_src_bytes_250": 0.0
+    },
+    "blindado": {
+      "trafego_limpo": {
+        "acuracia": 99.98,
+        "recall": 99.41,
+        "precisao": 100.0,
+        "taxa_falsos_positivos": 0.0,
+        "falsos_positivos": 0,
+        "falsos_negativos": 5
+      },
+      "deteccao_ataques_originais": 99.41,
+      "deteccao_evasao_fixa": 99.29,
+      "deteccao_evasao_aleatoria": 88.63,
+      "falsos_positivos_normal_src_bytes_250": 0.0
+    }
+  },
+  "por_categoria": [
+    {
+      "categoria": "DoS",
+      "n": 830,
+      "original_limpo": 99.76,
+      "original_evasao_fixa": 5.3,
+      "blindado_evasao_fixa": 99.76,
+      "blindado_evasao_aleatoria": 88.92
+    },
+    {
+      "categoria": "Probe",
+      "n": 11,
+      "original_limpo": 90.91,
+      "original_evasao_fixa": 72.73,
+      "blindado_evasao_fixa": 90.91,
+      "blindado_evasao_aleatoria": 90.91
+    },
+    {
+      "categoria": "R2L",
+      "n": 3,
+      "original_limpo": 0.0,
+      "original_evasao_fixa": 0.0,
+      "blindado_evasao_fixa": 0.0,
+      "blindado_evasao_aleatoria": 0.0
+    },
+    {
+      "categoria": "U2R",
+      "n": 0,
+      "original_limpo": null,
+      "original_evasao_fixa": null,
+      "blindado_evasao_fixa": null,
+      "blindado_evasao_aleatoria": null
+    },
+    {
+      "categoria": "Sem DoS",
+      "n": 14,
+      "original_limpo": 71.43,
+      "original_evasao_fixa": 57.14,
+      "blindado_evasao_fixa": 71.43,
+      "blindado_evasao_aleatoria": 71.43
+    }
+  ],
+  "feature_importance_top10": [
+    {
+      "atributo": "srv_count",
+      "original": 0.2253,
+      "blindado": 0.1521
+    },
+    {
+      "atributo": "count",
+      "original": 0.2063,
+      "blindado": 0.1576
+    },
+    {
+      "atributo": "protocol_type",
+      "original": 0.1212,
+      "blindado": 0.1369
+    },
+    {
+      "atributo": "src_bytes",
+      "original": 0.071,
+      "blindado": 0.0919
+    },
+    {
+      "atributo": "same_srv_rate",
+      "original": 0.057,
+      "blindado": 0.0571
+    },
+    {
+      "atributo": "dst_host_same_src_port_rate",
+      "original": 0.0563,
+      "blindado": 0.071
+    },
+    {
+      "atributo": "srv_serror_rate",
+      "original": 0.0294,
+      "blindado": 0.0186
+    },
+    {
+      "atributo": "dst_host_srv_count",
+      "original": 0.029,
+      "blindado": 0.0413
+    },
+    {
+      "atributo": "service",
+      "original": 0.0276,
+      "blindado": 0.0492
+    },
+    {
+      "atributo": "dst_host_srv_serror_rate",
+      "original": 0.0274,
+      "blindado": 0.0355
+    }
+  ]
+}
