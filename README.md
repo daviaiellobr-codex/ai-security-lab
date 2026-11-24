@@ -217,6 +217,16 @@ python3 01-llm-red-blue-teaming/run_garak_suite.py
 
 Por padrão são `baseline`, `blindado` e `guardrail` contra `HijackHateHumans` e `HijackLongPrompt`. Para escolher, use `--archs` (inclui `guardrail-io`, `promptguard` e `promptguard+llamaguard`) e `--probes`, por exemplo `--probes encoding.InjectBase64`.
 
+**Outro modelo alvo.** A bateria usa `llama3.2` por padrão. Para testar outro modelo, crie a versão blindada dele com o mesmo `Modelfile` e passe os dois nomes:
+
+```bash
+ollama pull qwen2.5:7b
+sed "s/^FROM .*/FROM qwen2.5:7b/" 01-llm-red-blue-teaming/Modelfile > /tmp/Modelfile.alvo
+ollama create qwen2.5-blindado -f /tmp/Modelfile.alvo
+python3 01-llm-red-blue-teaming/run_garak_suite.py --target-model qwen2.5:7b --hardened-model qwen2.5-blindado \
+    --archs baseline blindado guardrail guardrail-io --probes encoding.InjectBase64
+```
+
 **Detector de injeção (Prompt Guard 2).** O `meta-llama/Llama-Prompt-Guard-2-86M` é restrito no Hugging Face. Uma vez só:
 
 1. Crie uma conta em [huggingface.co](https://huggingface.co), abra a [página do modelo](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M) e aceite a licença (Llama 4 Community License).

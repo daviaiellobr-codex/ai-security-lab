@@ -21,6 +21,8 @@ sucesso do ataque (ASR) com o intervalo de confiança de 95% calculado pelo pró
 Uso (com o venv ativo e o Ollama rodando):
   python3 01-llm-red-blue-teaming/run_garak_suite.py
   python3 01-llm-red-blue-teaming/run_garak_suite.py --archs baseline guardrail --probes promptinject.HijackLongPrompt
+  python3 01-llm-red-blue-teaming/run_garak_suite.py --target-model qwen2.5:7b --hardened-model qwen2.5-blindado \
+      --archs baseline blindado guardrail-io --probes encoding.InjectBase64
 """
 
 import argparse
@@ -41,20 +43,31 @@ ROOT = HERE.parent
 PROXY = HERE / "guardrail_proxy.py"
 REST_TEMPLATE = HERE / "rest_guardrail.json"
 
-ARCHS = {
-    "baseline": {"rotulo": "1. Baseline (llama3.2)", "modelo": "llama3.2",
-                 "requer": {"llama3.2"}},
-    "blindado": {"rotulo": "2. Camada única (llama3.2-blindado)", "modelo": "llama3.2-blindado",
-                 "requer": {"llama3.2-blindado"}},
+# {alvo} = modelo sem defesa; {blindado} = o mesmo modelo com o System Prompt do Modelfile
+ARCH_TEMPLATES = {
+    "baseline": {"rotulo": "1. Baseline ({alvo})", "modelo": "{alvo}", "requer": ["{alvo}"]},
+    "blindado": {"rotulo": "2. Camada única ({blindado})", "modelo": "{blindado}", "requer": ["{blindado}"]},
     "guardrail": {"rotulo": "3. Defense in Depth (Llama Guard na entrada)", "proxy": "input",
-                  "requer": {"llama3.2-blindado", "llama-guard3:1b"}},
+                  "requer": ["{blindado}", "llama-guard3:1b"]},
     "guardrail-io": {"rotulo": "4. Llama Guard na entrada e na saída", "proxy": "input-output",
-                     "requer": {"llama3.2-blindado", "llama-guard3:1b"}},
+                     "requer": ["{blindado}", "llama-guard3:1b"]},
     "promptguard": {"rotulo": "5. Prompt Guard na entrada", "proxy": "injection",
-                    "requer": {"llama3.2-blindado"}},
+                    "requer": ["{blindado}"]},
     "promptguard+llamaguard": {"rotulo": "6. Prompt Guard + Llama Guard na entrada", "proxy": "injection+input",
-                               "requer": {"llama3.2-blindado", "llama-guard3:1b"}},
+                               "requer": ["{blindado}", "llama-guard3:1b"]},
 }
+
+
+def resolve_archs(target, hardened):
+    names = {"alvo": target, "blindado": hardened}
+    archs = {}
+    for key, spec in ARCH_TEMPLATES.items():
+        resolved = {k: v.format(**names) if isinstance(v, str) else v for k, v in spec.items()}
+        resolved["requer"] = {m.format(**names) for m in spec["requer"]}
+        archs[key] = resolved
+    return archs
+
+
 INJECTION_PROXY_MODES = ("injection", "injection+input")
 DEFAULT_ARCHS = ["baseline", "blindado", "guardrail"]
 DEFAULT_PROBES = ["promptinject.HijackHateHumans", "promptinject.HijackLongPrompt"]
@@ -132,7 +145,7 @@ def pct(value):
 # ------------------------------------------------------------------- execução
 
 def run_one(arch, probe, args, out_dir):
-    spec = ARCHS[arch]
+    spec = args.specs[arch]
     name = f"{arch}__{probe.split('.')[-1]}"
     prefix = out_dir / name  # caminho absoluto: o Garak grava o relatório direto aqui
     cmd = list(args.garak_cmd) + ["--spec", f"probes.{probe}", "--report_prefix", str(prefix)]
@@ -151,7 +164,8 @@ def run_one(arch, probe, args, out_dir):
         cmd += ["--config", str(config_path), "--target_type", "rest"]
 
         proxy_cmd = [sys.executable, str(PROXY), "--mode", spec["proxy"], "--port", str(args.proxy_port),
-                     "--ollama-url", args.ollama_url, "--log", str(proxy_log)]
+                     "--ollama-url", args.ollama_url, "--log", str(proxy_log),
+                     "--target-model", args.hardened_model]
         uses_injection = spec["proxy"] in INJECTION_PROXY_MODES
         if uses_injection:
             proxy_cmd += ["--injection-threshold", str(args.injection_threshold)]
@@ -235,7 +249,10 @@ def write_summary(results, out_dir, meta):
 
 def main():
     parser = argparse.ArgumentParser(description="Roda a bateria do Experimento 1 (arquiteturas × probes do Garak).")
-    parser.add_argument("--archs", nargs="+", choices=list(ARCHS), default=DEFAULT_ARCHS)
+    parser.add_argument("--archs", nargs="+", choices=list(ARCH_TEMPLATES), default=DEFAULT_ARCHS)
+    parser.add_argument("--target-model", default="llama3.2", help="modelo alvo sem defesa (padrão: llama3.2)")
+    parser.add_argument("--hardened-model", default="llama3.2-blindado",
+                        help="modelo alvo com o System Prompt defensivo (padrão: llama3.2-blindado)")
     parser.add_argument("--probes", nargs="+", default=DEFAULT_PROBES, help="probes do Garak, ex.: promptinject.HijackLongPrompt")
     parser.add_argument("--generations", type=int, help="gerações por prompt (padrão do Garak: 5)")
     parser.add_argument("--injection-model", help="detector de injeção (padrão: meta-llama/Llama-Prompt-Guard-2-86M)")
@@ -247,23 +264,28 @@ def main():
     parser.add_argument("--garak-cmd", type=shlex.split, default=[sys.executable, "-m", "garak"],
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
+    args.specs = resolve_archs(args.target_model, args.hardened_model)
 
-    needed = set().union(*(ARCHS[a]["requer"] for a in args.archs))
+    needed = set().union(*(args.specs[a]["requer"] for a in args.archs))
     try:
         missing = sorted(needed - installed_models(args.ollama_url))
     except OSError as e:
         sys.exit(f"Não consegui falar com o Ollama em {args.ollama_url}: {e}")
     if missing:
-        hint = " (crie com: ollama create llama3.2-blindado -f 01-llm-red-blue-teaming/Modelfile)" \
-            if "llama3.2-blindado" in missing else ""
+        hint = ""
+        if args.hardened_model in missing:
+            hint = (f"\nPara criar a versão blindada: sed \"s/^FROM .*/FROM {args.target_model}/\" "
+                    f"01-llm-red-blue-teaming/Modelfile > /tmp/Modelfile.alvo && "
+                    f"ollama create {args.hardened_model} -f /tmp/Modelfile.alvo")
         sys.exit(f"Modelos ausentes no Ollama: {', '.join(missing)}{hint}")
 
     started = datetime.now(timezone.utc)
     out_dir = (args.out or ROOT / "results" / "exp1" / f"suite_{started.strftime('%Y%m%dT%H%M%SZ')}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"inicio": started.isoformat(timespec="seconds"), "arquiteturas": args.archs,
-            "probes": args.probes, "geracoes": args.generations or "padrão do Garak"}
-    if any(ARCHS[a].get("proxy") in INJECTION_PROXY_MODES for a in args.archs):
+            "probes": args.probes, "geracoes": args.generations or "padrão do Garak",
+            "modelo_alvo": args.target_model, "modelo_blindado": args.hardened_model}
+    if any(args.specs[a].get("proxy") in INJECTION_PROXY_MODES for a in args.archs):
         meta["detector_injecao"] = args.injection_model or "meta-llama/Llama-Prompt-Guard-2-86M"
         meta["limiar_injecao"] = args.injection_threshold
 
@@ -271,7 +293,7 @@ def main():
     print(f"{len(runs)} execuções. Resultados em {out_dir}")
     results = []
     for i, (arch, probe) in enumerate(runs, 1):
-        print(f"[{i}/{len(runs)}] {ARCHS[arch]['rotulo']} × {probe} ...", flush=True)
+        print(f"[{i}/{len(runs)}] {args.specs[arch]['rotulo']} × {probe} ...", flush=True)
         result = run_one(arch, probe, args, out_dir)
         results.append(result)
         if "erro" in result:
