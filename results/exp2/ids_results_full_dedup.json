@@ -1,0 +1,156 @@
+{
+  "config": {
+    "seed": 42,
+    "subset": "full",
+    "dedup": true,
+    "n_estimators": 100,
+    "test_size": 0.25,
+    "fracao_adversarial_training": 0.3
+  },
+  "dataset": {
+    "subset": "full",
+    "conexoes": 494021,
+    "duplicatas": 348435,
+    "dedup": true,
+    "conexoes_usadas": 145586,
+    "treino": 109189,
+    "teste": 36397,
+    "ataques_no_teste": 14439
+  },
+  "modelos": {
+    "original": {
+      "trafego_limpo": {
+        "acuracia": 99.94,
+        "recall": 99.89,
+        "precisao": 99.97,
+        "taxa_falsos_positivos": 0.02,
+        "falsos_positivos": 5,
+        "falsos_negativos": 16
+      },
+      "deteccao_ataques_originais": 99.89,
+      "deteccao_evasao_fixa": 96.19,
+      "deteccao_evasao_aleatoria": 97.01,
+      "deteccao_so_desacelerar": 99.76,
+      "falsos_positivos_normal_src_bytes_250": 0.0
+    },
+    "blindado": {
+      "trafego_limpo": {
+        "acuracia": 99.95,
+        "recall": 99.9,
+        "precisao": 99.97,
+        "taxa_falsos_positivos": 0.02,
+        "falsos_positivos": 5,
+        "falsos_negativos": 14
+      },
+      "deteccao_ataques_originais": 99.9,
+      "deteccao_evasao_fixa": 99.9,
+      "deteccao_evasao_aleatoria": 99.81,
+      "deteccao_so_desacelerar": 99.9,
+      "falsos_positivos_normal_src_bytes_250": 0.41
+    }
+  },
+  "por_categoria": [
+    {
+      "categoria": "DoS",
+      "n": 13636,
+      "original_limpo": 100.0,
+      "original_evasao_fixa": 96.65,
+      "blindado_evasao_fixa": 100.0,
+      "blindado_evasao_aleatoria": 99.93,
+      "original_so_desacelerar": 99.88,
+      "blindado_so_desacelerar": 100.0
+    },
+    {
+      "categoria": "Probe",
+      "n": 514,
+      "original_limpo": 99.22,
+      "original_evasao_fixa": 85.41,
+      "blindado_evasao_fixa": 99.42,
+      "blindado_evasao_aleatoria": 99.22,
+      "original_so_desacelerar": 98.83,
+      "blindado_so_desacelerar": 99.22
+    },
+    {
+      "categoria": "R2L",
+      "n": 273,
+      "original_limpo": 97.44,
+      "original_evasao_fixa": 95.97,
+      "blindado_evasao_fixa": 97.8,
+      "blindado_evasao_aleatoria": 96.7,
+      "original_so_desacelerar": 97.44,
+      "blindado_so_desacelerar": 97.8
+    },
+    {
+      "categoria": "U2R",
+      "n": 16,
+      "original_limpo": 68.75,
+      "original_evasao_fixa": 56.25,
+      "blindado_evasao_fixa": 68.75,
+      "blindado_evasao_aleatoria": 68.75,
+      "original_so_desacelerar": 68.75,
+      "blindado_so_desacelerar": 68.75
+    },
+    {
+      "categoria": "Sem DoS",
+      "n": 803,
+      "original_limpo": 98.01,
+      "original_evasao_fixa": 88.42,
+      "blindado_evasao_fixa": 98.26,
+      "blindado_evasao_aleatoria": 97.76,
+      "original_so_desacelerar": 97.76,
+      "blindado_so_desacelerar": 98.13
+    }
+  ],
+  "feature_importance_top10": [
+    {
+      "atributo": "same_srv_rate",
+      "original": 0.1241,
+      "blindado": 0.1301
+    },
+    {
+      "atributo": "src_bytes",
+      "original": 0.1216,
+      "blindado": 0.0439
+    },
+    {
+      "atributo": "diff_srv_rate",
+      "original": 0.0955,
+      "blindado": 0.0961
+    },
+    {
+      "atributo": "dst_host_srv_count",
+      "original": 0.083,
+      "blindado": 0.0915
+    },
+    {
+      "atributo": "count",
+      "original": 0.0787,
+      "blindado": 0.0157
+    },
+    {
+      "atributo": "dst_host_same_srv_rate",
+      "original": 0.0773,
+      "blindado": 0.0982
+    },
+    {
+      "atributo": "flag",
+      "original": 0.0733,
+      "blindado": 0.1125
+    },
+    {
+      "atributo": "dst_host_serror_rate",
+      "original": 0.0466,
+      "blindado": 0.0473
+    },
+    {
+      "atributo": "srv_serror_rate",
+      "original": 0.0456,
+      "blindado": 0.0089
+    },
+    {
+      "atributo": "serror_rate",
+      "original": 0.0343,
+      "blindado": 0.0097
+    }
+  ]
+}
