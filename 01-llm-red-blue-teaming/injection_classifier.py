@@ -2,8 +2,9 @@
 Classificador de prompt injection (Hugging Face) usado como camada de entrada.
 
 Padrão: Llama Prompt Guard 2 86M, da Meta. É um modelo BERT (mDeBERTa) que só devolve
-um rótulo, BENIGN ou MALICIOUS, treinado para reconhecer padrões explícitos de ataque
-(injeções e jailbreaks). Diferente do Llama Guard, ele não avalia se o conteúdo é nocivo:
+um rótulo, benigno ou malicioso, treinado para reconhecer padrões explícitos de ataque
+(injeções e jailbreaks). O modelo publicado usa rótulos genéricos: LABEL_0 (benigno) e
+LABEL_1 (malicioso). Diferente do Llama Guard, ele não avalia se o conteúdo é nocivo:
 avalia se o texto tenta sequestrar as instruções do modelo.
 
 O modelo é restrito no Hugging Face: é preciso aceitar a licença na página do modelo e
@@ -32,6 +33,9 @@ class InjectionClassifier:
 
         labels = {int(i): str(name).upper() for i, name in self.model.config.id2label.items()}
         self.malicious_ids = sorted(i for i, name in labels.items() if name in MALICIOUS_LABELS)
+        if not self.malicious_ids and set(labels.values()) == {"LABEL_0", "LABEL_1"}:
+            # Classificador binário com rótulos genéricos (caso do Prompt Guard 2): 1 = malicioso
+            self.malicious_ids = [i for i, name in labels.items() if name == "LABEL_1"]
         if not self.malicious_ids:
             raise ValueError(f"{model_id}: nenhum rótulo de ataque reconhecido em {labels}")
         self.labels = labels
