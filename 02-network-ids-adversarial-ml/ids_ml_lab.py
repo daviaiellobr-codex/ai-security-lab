@@ -44,9 +44,11 @@ CATEGORIES = ["DoS", "Probe", "R2L", "U2R"]
 
 # --------------------------------------------------------------------------- dados
 
-def load_data(dedup):
+def load_data(dedup, seed):
     print("1. Carregando dataset de tráfego de rede (KDD99 10%, subset SA)...")
-    data = fetch_kddcup99(subset="SA", percent10=True, as_frame=True)
+    # O subset SA junta todo o tráfego normal com 3377 ataques SORTEADOS (com reposição).
+    # Sem random_state, cada execução sorteia ataques diferentes e os resultados mudam.
+    data = fetch_kddcup99(subset="SA", percent10=True, as_frame=True, random_state=seed)
     df = data.frame.copy()
 
     n_total = len(df)
@@ -141,10 +143,11 @@ def main():
     parser = argparse.ArgumentParser(description="Experimento 2: evasão e Adversarial Training em um IDS.")
     parser.add_argument("--dedup", action="store_true",
                         help="remove conexões duplicadas antes de separar treino e teste")
-    parser.add_argument("--seed", type=int, default=42, help="semente aleatória (padrão: 42)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="semente do sorteio de ataques do dataset, do split e dos modelos (padrão: 42)")
     args = parser.parse_args()
 
-    X, y, category, dataset_info = load_data(args.dedup)
+    X, y, category, dataset_info = load_data(args.dedup, args.seed)
     X_train, X_test, y_train, y_test, cat_train, cat_test = train_test_split(
         X, y, category, test_size=0.25, random_state=args.seed, stratify=y
     )

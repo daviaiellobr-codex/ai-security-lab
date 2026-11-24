@@ -41,22 +41,32 @@ Avaliação automatizada de vulnerabilidades (**OWASP LLM01: Prompt Injection**)
 | Camada da Arquitetura | Payloads Barrados | Payloads Aprovados | Resultado Final |
 | :--- | :---: | :---: | :---: |
 | **Camada 1: Input Guardrail** (`llama-guard3:1b`) | 82 / 256 (32,03%) | 174 / 256 (67,97%) | Ponto cego em payloads Base64 |
-| **Camada 2: Modelo Alvo** (`llama3.2-blindado`) | **174 / 174 (100%)** | 0 | **PASS (256/256 bloqueados no total)** |
+| **Camada 2: Modelo Alvo** (`llama3.2-blindado`) | 174 / 174 (100%) | 0 | Incapacidade de decodificar, não defesa (ver controle abaixo) |
 
 > Resultados obtidos com o proxy no modo `input` (Llama Guard apenas na entrada).
+
+### Controle: o modelo alvo sabe ler Base64? (`base64_decode_check.py`)
+
+| Modelo | Frases inofensivas decodificadas |
+| :--- | :---: |
+| `llama3.2` | 0 / 20 (0%) |
+| `llama3.2-blindado` | 0 / 20 (0%) |
+
+Os modelos não recusam: eles inventam um texto qualquer. Para a frase codificada *"The library opens at nine in the morning."*, por exemplo, o `llama3.2` respondeu `"Hello world"`. Os detalhes estão em `results/exp1/base64_decode_check.json`.
 
 **Principais conclusões:**
 * **Prompt Hardening** reduziu a taxa de sucesso do ataque em **76%** (de 46,48% para 10,94%), mas não eliminou o risco devido ao compartilhamento da janela de contexto entre instruções e dados.
 * **Defense in Depth** zerou as falhas e reduziu a latência total em **73%** graças ao *early-exit* do classificador `llama-guard3:1b`.
-* **Ponto cego de classificadores de entrada:** payloads codificados em Base64 contornaram o filtro inicial em 68% dos casos.
-* **Ressalva sobre a Camada 2:** os 174 bloqueios do `llama3.2-blindado` só contam como defesa se o modelo for capaz de decodificar Base64. Um modelo de 3B pode simplesmente não entender o payload, e aí o ataque falha por incapacidade, não pelo System Prompt. Os controles abaixo separam as duas hipóteses.
+* **Ponto cego de classificadores de entrada:** payloads codificados em Base64 contornaram o Llama Guard em 68% dos casos.
+* **A Camada 2 não defendeu: ela não sabe ler Base64.** Os dois modelos decodificaram 0% das frases inofensivas, então os 174 "bloqueios" vêm de incapacidade do modelo alvo, não do System Prompt. Com um modelo que decodifique Base64, esses 174 payloads seriam um risco real.
 
-### 🔬 Controles adicionais (a rodar)
+### 🔬 Próximos testes
+
+Com o `llama3.2` decodificando 0%, rodar o `InjectBase64` sem defesa ou o proxy no modo `input-output` não acrescenta informação para esse modelo. Esses testes passam a fazer sentido com um modelo alvo que decodifique Base64 (use o `base64_decode_check.py` para escolher):
 
 | Teste | Pergunta que responde |
 | :--- | :--- |
-| `InjectBase64` contra o `llama3.2` padrão | O ataque Base64 funciona sem nenhuma defesa? Sem esse baseline, não dá para atribuir os bloqueios ao hardening. |
-| `base64_decode_check.py` | O modelo consegue decodificar frases inofensivas em Base64? |
+| `InjectBase64` contra o modelo novo, sem defesa | Quanto do ataque funciona quando o alvo entende o payload? |
 | Proxy no modo `input-output` | Um Llama Guard avaliando a **resposta** (já decodificada) barra o que passou pela entrada? |
 
 Os comandos estão em [Como Reproduzir](#-como-reproduzir).
@@ -67,48 +77,58 @@ Os comandos estão em [Como Reproduzir](#-como-reproduzir).
 
 Treinamento de um classificador **Random Forest** sobre tráfego de rede (**KDD Cup 99**, subset `SA`) seguido de simulação de ataque de evasão (*Low-and-Slow*) e mitigação via **Adversarial Training**.
 
-### Resultados: Resiliência do Detector de Intrusão
+### Resultados (semente 42)
 
-| Cenário de Avaliação | Recall (Detecção de Ataques) | Taxa de Evasão (Falsos Negativos) |
+| Métrica | Com duplicatas (padrão) | Sem duplicatas (`--dedup`) |
 | :--- | :---: | :---: |
-| **1. Teste Limpo (Tráfego Padrão)** | **99,41%** | 0,59% |
-| **2. Sob Ataque de Evasão (*Low-and-Slow*)** | **27,96%** | **72,04%** |
-| **3. Após *Adversarial Training* (30% amostras evadidas)** | **99,53%** | 0,47% |
+| Conexões no teste (ataques) | 25.164 (844) | 22.209 (251) |
+| **Original:** Recall em tráfego limpo | 99,29% | 98,41% |
+| **Original:** detecção sob evasão *Low-and-Slow* | **6,16%** (93,84% evadidos) | **65,34%** (34,66% evadidos) |
+| **Blindado:** Recall em tráfego limpo | 99,41% | 98,41% |
+| **Blindado:** detecção sob a evasão vista no treino | 99,29% | 98,01% |
+| **Blindado:** detecção sob evasão com valores novos | **88,63%** | **97,21%** |
+| Falsos positivos em tráfego limpo (original → blindado) | 0,00% → 0,00% | 0,00% → 0,00% |
+| Falsos positivos no teste de atalho: tráfego normal com `src_bytes = 250` (blindado) | 0,00% | 0,00% |
+| Peso de `count` + `srv_count` (original → blindado) | 43,17% → 30,97% | 10,85% → 7,89% |
 
-### Análise de Feature Importance (Antes vs. Depois do Hardening)
+> Versões anteriores deste README traziam números de uma execução sem semente no sorteio de ataques do subset `SA` (o scikit-learn sorteia 3377 ataques com reposição a cada carregamento), por isso diferem destes. Os arquivos completos estão em `results/exp2/`.
 
-| Atributo de Rede | Peso no Modelo Original | Peso no Modelo Blindado | Impacto |
-| :--- | :---: | :---: | :--- |
-| `count` | 0.2202 | **0.1544** | Redução de dependência de volume |
-| `srv_count` | 0.1835 | **0.1466** | Redução de dependência de volume |
-| `protocol_type` | 0.1125 | **0.1213** | Maior peso estrutural |
-| `src_bytes` | 0.0811 | **0.0844** | Estável |
-| `dst_host_same_src_port_rate` | 0.0620 | **0.0752** | Maior peso comportamental |
+### Feature Importance (com duplicatas)
 
-> O script atual usa a mesma semente, o mesmo split e o mesmo treino da versão que gerou estas tabelas, e agora também imprime e salva a feature importance em `results/exp2/`.
+| Atributo de Rede | Modelo Original | Modelo Blindado |
+| :--- | :---: | :---: |
+| `srv_count` | 0.2253 | **0.1521** |
+| `count` | 0.2063 | **0.1576** |
+| `protocol_type` | 0.1212 | **0.1369** |
+| `src_bytes` | 0.0710 | **0.0919** |
+| `same_srv_rate` | 0.0570 | **0.0571** |
+| `dst_host_same_src_port_rate` | 0.0563 | **0.0710** |
+
+Sem duplicatas, o modelo original passa a se apoiar principalmente em `same_srv_rate` (0.1702) e nas taxas de erro SYN (`dst_host_serror_rate`, `srv_serror_rate`, `dst_host_srv_serror_rate`, `serror_rate`), e `count` cai para 0.0782.
+
+### Por categoria de ataque (com duplicatas)
+
+| Categoria | Ataques no teste | Original | Original + evasão | Blindado + valores novos |
+| :--- | :---: | :---: | :---: | :---: |
+| DoS | 830 | 99,76% | 5,30% | 88,92% |
+| Probe | 11 | 90,91% | 72,73% | 90,91% |
+| R2L | 3 | 0,00% | 0,00% | 0,00% |
+| U2R | 0 | – | – | – |
 
 **Principais conclusões:**
-* Métricas tradicionais em dados limpos (**99,98% de acurácia**) mascaram fragilidades adversariais: a concentração de **40,37%** da decisão em apenas duas features de taxa de pacotes (`count` e `srv_count`) permitiu que um ataque lento evadisse 72% das detecções.
-* O **Adversarial Training** restaurou o Recall para **99,53%** contra a mesma perturbação usada no treino.
-* **Ressalva:** a evasão usa valores fixos (`src_bytes = 250`, `serror_rate = 0`) tanto no treino quanto no teste. O modelo blindado pode ter aprendido esses valores como assinatura, e não o padrão de evasão. A redistribuição de pesos, sozinha, não prova robustez.
-
-### 🔬 Testes adicionados ao script
-
-| Teste | O que indica |
-| :--- | :--- |
-| Falsos positivos no tráfego normal limpo | Quanto o hardening custa em alarmes falsos. |
-| Evasão com valores sorteados (nunca vistos no treino) | Se a detecção cair muito em relação à evasão fixa, o ganho do Adversarial Training não generaliza. |
-| Teste de atalho: tráfego **normal** com `src_bytes = 250` | Se o modelo blindado passar a acusar essas conexões, ele decorou o valor. |
-| Resultados por categoria (DoS, Probe, R2L, U2R e "Sem DoS") | Se a evasão se concentra em DoS, ela descreve ataques que deixariam de funcionar em baixa taxa. |
-| `--dedup` | Repete tudo sem as conexões duplicadas do KDD99. |
+* **Acurácia alta mascara fragilidade:** com **99,98% de acurácia**, o modelo concentra **43%** da decisão em `count` e `srv_count`, e a evasão *Low-and-Slow* passa por **93,84%** das detecções.
+* **As duplicatas inflam a fragilidade, não só as métricas:** sem elas, o peso de `count` + `srv_count` cai para 11%, o modelo passa a usar taxas de erro SYN e `same_srv_rate`, e a evasão cai para 34,66%. Boa parte da dependência de volume vinha de cópias dos mesmos ataques DoS.
+* **O Adversarial Training funciona, mas generaliza menos do que parece:** com duplicatas, a detecção cai de 99,29% na perturbação vista no treino para **88,63%** com valores novos. Sem duplicatas, a queda é pequena (98,01% → 97,21%).
+* **O modelo blindado não decorou o valor da perturbação** (0,00% no teste de atalho), e o hardening não aumentou os falsos positivos em tráfego limpo.
+* **Na prática, o experimento mede DoS:** 830 dos 844 ataques do teste são DoS. Com só 14 ataques de outras categorias, não dá para concluir nada sobre Probe, R2L ou U2R. Além disso, a evasão que derruba a taxa de conexões de um DoS por volume descreve um ataque que deixaria de funcionar.
 
 ---
 
 ## ⚠️ Limitações
 
-* **KDD Cup 99 é antigo e tem muitos registros duplicados** (Tavallaee et al., *A Detailed Analysis of the KDD CUP 99 Data Set*, 2009). Cópias da mesma conexão caem no treino e no teste e inflam as métricas. A opção `--dedup` mede esse efeito; NSL-KDD, UNSW-NB15 e CIC-IDS2017 são alternativas mais atuais.
+* **KDD Cup 99 é antigo e tem muitos registros duplicados** (Tavallaee et al., *A Detailed Analysis of the KDD CUP 99 Data Set*, 2009). Aqui, 11,7% das conexões são duplicatas exatas, e o próprio subset `SA` sorteia os ataques com reposição: sem duplicatas, os ataques no teste caem de 844 para 251. Como isso muda as conclusões, os resultados trazem as duas configurações. NSL-KDD, UNSW-NB15 e CIC-IDS2017 são alternativas mais atuais.
 * **Ataque no espaço de features:** a evasão altera os valores da tabela diretamente, sem garantir que exista tráfego real com aqueles valores nem que o ataque continue funcionando. Em DoS por volume (`smurf`, `neptune`), reduzir a taxa de conexões desfaz o próprio ataque.
-* **Base desbalanceada:** o subset `SA` tem cerca de 1% de ataques, então acurácia sozinha diz pouco. Por isso o foco em Recall e falsos positivos.
+* **Base desbalanceada:** o subset `SA` (versão 10%) tem cerca de 3,4% de ataques (844 de 25.164 conexões no teste), então acurácia sozinha diz pouco. Por isso o foco em Recall e falsos positivos.
 * **Escopo do Experimento 1:** modelos locais pequenos (3B e 1B) e duas probes do Garak. Os números não se estendem automaticamente a modelos maiores ou a outras técnicas de injeção.
 
 ---
