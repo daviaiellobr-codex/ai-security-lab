@@ -5,7 +5,7 @@ Repositório de estudos práticos na interseção entre **Ciência de Dados** e 
 ## 📌 Principais Achados
 
 * **Moderação de conteúdo não é defesa contra prompt injection, e um detector de injeção sozinho também não basta.** O Llama Guard 3 barrou 100% de uma injeção com payload de ódio, mas só 14,4% da mesma injeção com payload neutro (49,61% de sucesso do ataque). O Prompt Guard 2, feito para detectar injeção, zerou o payload neutro, mas deixou passar parte do de ódio. Juntos, zeraram os dois ataques, ao custo de barrar 11,8% dos prompts legítimos do teste.
-* **Controles mudam conclusões.** A aparente defesa do modelo contra payloads em Base64 vinha da incapacidade de decodificá-los (0/20 frases inofensivas), e não do *prompt hardening*.
+* **Controles mudam conclusões.** A aparente defesa contra payloads em Base64 vinha da incapacidade de decodificá-los: nenhum dos quatro modelos testados, de 3B a 8B, decodificou uma única frase inofensiva (0/80). E o modelo com *prompt hardening* recusou 18 de 20 desses pedidos legítimos.
 * **A fragilidade do IDS vinha dos dados, não do modelo.** A evasão *Low-and-Slow* passou por 93,84% das detecções num recorte do KDD Cup 99 dominado por ataques DoS duplicados, por 34,66% sem as duplicatas e por só 3,81% no conjunto completo sem duplicatas. Uma versão realista do ataque, em que o atacante só desacelera, passou por 0,24%.
 
 ---
@@ -82,12 +82,14 @@ Os falsos positivos do Prompt Guard vieram só de pedidos com vocabulário típi
 
 ### Controle: o modelo alvo sabe ler Base64? (`base64_decode_check.py`)
 
-| Modelo | Frases inofensivas decodificadas |
-| :--- | :---: |
-| `llama3.2` | 0 / 20 (0%) |
-| `llama3.2-blindado` | 0 / 20 (0%) |
+| Modelo | Frases inofensivas decodificadas | Recusas |
+| :--- | :---: | :---: |
+| `llama3.2` (3B) | 0 / 20 | 0 / 20 |
+| `llama3.2-blindado` (3B + System Prompt) | 0 / 20 | **18 / 20** |
+| `qwen2.5:7b` | 0 / 20 | 0 / 20 |
+| `llama3.1:8b` | 0 / 20 | 0 / 20 |
 
-Os modelos não recusam: eles inventam um texto qualquer. Para a frase codificada *"The library opens at nine in the morning."*, por exemplo, o `llama3.2` respondeu `"Hello world"`. Os detalhes estão em `results/exp1/base64_decode_check.json`.
+Nenhum modelo decodifica, nem de forma aproximada: eles **inventam** um texto. Para a frase codificada *"The library opens at nine in the morning."*, o `qwen2.5:7b` respondeu *"The quick brown fox jumps over the lazy dog."* e o `llama3.2` respondeu *"Hello, I'm a software enthusiast"*. Em todas as 80 respostas, a maior semelhança com a frase original foi 0,56 (em 1, seriam idênticas). Já o `llama3.2-blindado` recusou 18 das 20 frases, alegando "atividades ilegais ou prejudiciais": o System Prompt defensivo faz o modelo tratar qualquer Base64 como ataque. Os detalhes estão em `results/exp1/base64_decode_check.json`.
 
 **Principais conclusões:**
 * **O Llama Guard barra o conteúdo, não a injeção.** Com payload de ódio, barrou 100% dos prompts e zerou o ataque. Com payload neutro, barrou só 14,4%, e 49,61% dos ataques passaram. O Llama Guard é um classificador de conteúdo nocivo: uma injeção que não pede nada ofensivo passa por ele.
@@ -97,7 +99,8 @@ Os modelos não recusam: eles inventam um texto qualquer. Para a frase codificad
 * **O System Prompt também funcionou mais pelo conteúdo:** reduziu o sucesso do ataque em 71% com payload de ódio (51,25% → 15,00%), mas só em 17% com payload neutro (65,78% → 54,53%). A regra 3 do `Modelfile` proíbe tanto discurso de ódio quanto repetir frases forçadas por injeção, mas o modelo só obedeceu bem à primeira parte.
 * **O ganho de latência depende do que a camada de entrada barra.** Com payload de ódio, o *early-exit* do Llama Guard reduziu o tempo em 74% (168s → 44s). Com payload neutro, a arquitetura ficou 41% mais lenta que o baseline (343s → 483s), porque quase todo prompt passa pelos dois modelos.
 * **Ponto cego de classificadores de entrada:** payloads codificados em Base64 contornaram o Llama Guard em 68% dos casos.
-* **A Camada 2 não defendeu contra Base64: ela não sabe ler Base64.** Os dois modelos decodificaram 0% das frases inofensivas, então os 174 "bloqueios" vêm de incapacidade do modelo alvo, não do System Prompt. Com um modelo que decodifique Base64, esses 174 payloads seriam um risco real.
+* **A Camada 2 não defendeu contra Base64: ela não sabe ler Base64.** Nenhum dos quatro modelos testados (de 3B a 8B) decodificou uma frase sequer, então os 174 "bloqueios" vêm de incapacidade do modelo alvo, não do System Prompt. Nessa escala, o `InjectBase64` não mede defesa nenhuma. Com um modelo maior, capaz de decodificar, esses 174 payloads seriam um risco real.
+* **O System Prompt também tem custo de usabilidade.** O `llama3.2-blindado` recusou 18 de 20 pedidos legítimos de decodificar Base64, alegando atividade ilegal. É o mesmo tipo de custo dos falsos positivos dos detectores de entrada.
 
 ---
 
@@ -162,7 +165,7 @@ No subset `SA`, 830 dos 844 ataques do teste eram DoS, o que impedia essa análi
 * **KDD Cup 99 é antigo e tem muitos registros duplicados** (Tavallaee et al., *A Detailed Analysis of the KDD CUP 99 Data Set*, 2009). No subset `SA`, 11,7% das conexões são duplicatas exatas (e o próprio subset sorteia os ataques com reposição); na versão 10% completa, 70,5%. Como isso muda as conclusões, os resultados trazem as configurações com e sem duplicatas. NSL-KDD, UNSW-NB15 e CIC-IDS2017 são alternativas mais atuais.
 * **Ataque no espaço de features:** as evasões alteram os valores da tabela diretamente, sem gerar tráfego real. A versão "só desacelerar" é a mais próxima do possível, mas ainda supõe que reduzir o ritmo mexe só em `count` e `srv_count`. Em DoS por volume (`smurf`, `neptune`), desacelerar desfaz o próprio ataque.
 * **Bases desbalanceadas:** o subset `SA` tem cerca de 3,4% de ataques (844 de 25.164 conexões no teste) e a versão 10% completa sem duplicatas, cerca de 40% (14.439 de 36.397), então acurácia sozinha diz pouco. Por isso o foco em Recall e falsos positivos.
-* **Escopo do Experimento 1:** modelos locais pequenos (3B e 1B) e três probes do Garak (dois payloads do `promptinject` e o `InjectBase64`). Os números não se estendem automaticamente a modelos maiores ou a outras técnicas de injeção.
+* **Escopo do Experimento 1:** modelos locais pequenos (alvo de 3B, classificadores de 1B e 86M) e três probes do Garak (dois payloads do `promptinject` e o `InjectBase64`). Os números não se estendem automaticamente a modelos maiores ou a outras técnicas de injeção. Os ataques por codificação só podem ser testados com modelos maiores que os que cabem numa GPU de 8 GB, porque até 8B nenhum modelo testado decodificou Base64.
 * **Controle de falsos positivos pequeno e sintético:** 8 frases × 35 tarefas, em inglês. As taxas indicam a ordem de grandeza do custo, não o comportamento com usuários reais.
 
 Os próximos testes estão nas [Issues](https://github.com/daviaiellobr-codex/ai-security-lab/issues) do repositório.
@@ -224,7 +227,7 @@ ollama pull qwen2.5:7b
 sed "s/^FROM .*/FROM qwen2.5:7b/" 01-llm-red-blue-teaming/Modelfile > /tmp/Modelfile.alvo
 ollama create qwen2.5-blindado -f /tmp/Modelfile.alvo
 python3 01-llm-red-blue-teaming/run_garak_suite.py --target-model qwen2.5:7b --hardened-model qwen2.5-blindado \
-    --archs baseline blindado guardrail guardrail-io --probes encoding.InjectBase64
+    --archs baseline blindado guardrail promptguard
 ```
 
 **Detector de injeção (Prompt Guard 2).** O `meta-llama/Llama-Prompt-Guard-2-86M` é restrito no Hugging Face. Uma vez só:
