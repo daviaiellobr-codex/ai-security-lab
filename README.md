@@ -85,7 +85,7 @@ Treinamento de um classificador **Random Forest** sobre tráfego de rede (**KDD 
 | `src_bytes` | 0.0811 | **0.0844** | Estável |
 | `dst_host_same_src_port_rate` | 0.0620 | **0.0752** | Maior peso comportamental |
 
-> O script atual usa a mesma semente, o mesmo split e o mesmo treino da versão que gerou estas tabelas, e agora também imprime e salva a feature importance em `results/exp2/`.
+> ⚠️ **Estas tabelas não são reproduzíveis.** O subset `SA` do scikit-learn sorteia 3377 ataques (com reposição) a cada carregamento, e a versão que gerou estes números não fixava essa semente. O script agora passa `random_state` ao `fetch_kddcup99`; as tabelas serão atualizadas com uma execução de semente fixa.
 
 **Principais conclusões:**
 * Métricas tradicionais em dados limpos (**99,98% de acurácia**) mascaram fragilidades adversariais: a concentração de **40,37%** da decisão em apenas duas features de taxa de pacotes (`count` e `srv_count`) permitiu que um ataque lento evadisse 72% das detecções.
