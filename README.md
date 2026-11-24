@@ -76,16 +76,6 @@ Os modelos não recusam: eles inventam um texto qualquer. Para a frase codificad
 * **Ponto cego de classificadores de entrada:** payloads codificados em Base64 contornaram o Llama Guard em 68% dos casos.
 * **A Camada 2 não defendeu contra Base64: ela não sabe ler Base64.** Os dois modelos decodificaram 0% das frases inofensivas, então os 174 "bloqueios" vêm de incapacidade do modelo alvo, não do System Prompt. Com um modelo que decodifique Base64, esses 174 payloads seriam um risco real.
 
-### 🔬 Próximos testes
-
-| Teste | Pergunta que responde |
-| :--- | :--- |
-| Um classificador treinado para detectar **injeção** (ex.: Prompt Guard, da Meta) na entrada, no lugar do Llama Guard ou junto com ele | Uma defesa feita para injeção barra o payload neutro que o Llama Guard deixou passar? |
-| `InjectBase64` contra um modelo que decodifique Base64 (use o `base64_decode_check.py` para escolher), sem defesa | Quanto do ataque funciona quando o alvo entende o payload? |
-| Proxy no modo `input-output` com esse modelo | Um Llama Guard avaliando a **resposta** (já decodificada) barra o que passou pela entrada? |
-
-Os comandos estão em [Como Reproduzir](#-como-reproduzir).
-
 ---
 
 ## 🌐 Experimento 2: Adversarial Machine Learning em Detecção de Intrusão (Network IDS)
@@ -145,6 +135,8 @@ Sem duplicatas, o modelo original passa a se apoiar principalmente em `same_srv_
 * **Ataque no espaço de features:** a evasão altera os valores da tabela diretamente, sem garantir que exista tráfego real com aqueles valores nem que o ataque continue funcionando. Em DoS por volume (`smurf`, `neptune`), reduzir a taxa de conexões desfaz o próprio ataque.
 * **Base desbalanceada:** o subset `SA` (versão 10%) tem cerca de 3,4% de ataques (844 de 25.164 conexões no teste), então acurácia sozinha diz pouco. Por isso o foco em Recall e falsos positivos.
 * **Escopo do Experimento 1:** modelos locais pequenos (3B e 1B) e três probes do Garak (dois payloads do `promptinject` e o `InjectBase64`). Os números não se estendem automaticamente a modelos maiores ou a outras técnicas de injeção.
+
+Os próximos testes estão nas [Issues](https://github.com/daviaiellobr-codex/ai-security-lab/issues) do repositório.
 
 ---
 
