@@ -2,9 +2,11 @@
 Proxy HTTP de guardrails para o Experimento 1 (Garak -> proxy -> Ollama).
 
 Modos (--mode):
-  model         só o modelo alvo, sem classificador
-  input         Llama Guard avalia o prompt antes do modelo alvo (arquitetura 3 do README)
-  input-output  Llama Guard avalia o prompt e também a resposta do modelo alvo
+  model            só o modelo alvo, sem classificador
+  input            Llama Guard avalia o prompt antes do modelo alvo (arquitetura 3 do README)
+  input-output     Llama Guard avalia o prompt e também a resposta do modelo alvo
+  injection        detector de prompt injection (Prompt Guard 2) avalia o prompt antes do modelo alvo
+  injection+input  detector de injeção e Llama Guard avaliam o prompt antes do modelo alvo
 
 Cada requisição é registrada em JSONL (results/exp1/) com a camada que bloqueou, os
 vereditos do Llama Guard e a latência. Ao encerrar com Ctrl+C, o proxy imprime um resumo.
@@ -12,7 +14,7 @@ Para resumir um log já existente:
 
   python3 01-llm-red-blue-teaming/guardrail_proxy.py --summarize results/exp1/<arquivo>.jsonl
 
-Se o Ollama falhar ou estourar o timeout, o proxy responde HTTP 502. Assim o Garak registra
+Se o Ollama ou o detector de injeção falharem, o proxy responde HTTP 502. Assim o Garak registra
 o erro em vez de contar a tentativa como bloqueada, o que inflaria a taxa de defesa.
 """
 
@@ -26,10 +28,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "results" / "exp1"
-MODES = ("model", "input", "input-output")
+MODES = ("model", "input", "input-output", "injection", "injection+input")
+INJECTION_MODES = ("injection", "injection+input")
+LLAMA_GUARD_INPUT_MODES = ("input", "input-output", "injection+input")
 
 
-class OllamaError(RuntimeError):
+class GuardrailError(RuntimeError):
+    """Falha em alguma camada de defesa; vira HTTP 502 para o Garak."""
+
+
+class OllamaError(GuardrailError):
     """Falha ao consultar o Ollama (conexão, timeout ou resposta inesperada)."""
 
 
@@ -61,8 +69,20 @@ def run_pipeline(cfg, prompt, record):
     """Executa as camadas de defesa e devolve a resposta que vai para o Garak."""
     conversation = [{"role": "user", "content": prompt}]
 
+    # Camada 0: detector de injeção (Prompt Guard). Avalia se o texto tenta sequestrar as
+    # instruções do modelo, independentemente de o conteúdo ser ofensivo.
+    if cfg.mode in INJECTION_MODES:
+        try:
+            score = cfg.injection.score(prompt)
+        except Exception as e:  # erro de GPU, memória etc.: não pode virar "bloqueio"
+            raise GuardrailError(f"detector de injeção: {e}") from e
+        record["score_injecao"] = round(score, 4)
+        if score >= cfg.injection_threshold:
+            record["bloqueado_por"] = "injecao"
+            return f"[BLOQUEADO PELO DETECTOR DE INJEÇÃO]: probabilidade de ataque {score:.2f}."
+
     # Camada 1: Llama Guard avalia o prompt antes de chegar ao modelo alvo
-    if cfg.mode in ("input", "input-output"):
+    if cfg.mode in LLAMA_GUARD_INPUT_MODES:
         verdict = ollama_chat(cfg.ollama_url, cfg.guard_model, conversation, cfg.timeout)
         record["veredito_entrada"] = verdict
         if is_unsafe(verdict):
@@ -123,8 +143,8 @@ def make_handler(cfg, records, log_file):
                 reply = run_pipeline(cfg, prompt, record)
                 status, body = 200, {"response": reply}
                 record["resposta_enviada"] = reply
-            except OllamaError as e:
-                status, body = 502, {"error": f"falha ao consultar o Ollama: {e}"}
+            except GuardrailError as e:
+                status, body = 502, {"error": f"falha numa camada de defesa: {e}"}
                 record["erro"] = str(e)
 
             record["latencia_s"] = round(time.perf_counter() - start, 3)
@@ -156,13 +176,14 @@ def summarize(records):
         print(f"\nExecução {run_id} | modo {rs[0].get('modo')} | modelo alvo {rs[0].get('modelo_alvo')}")
         lines = [
             ("Requisições", str(total)),
+            ("Barradas pelo detector de injeção", share(outcome["injecao"])),
             ("Barradas na entrada (Llama Guard)", share(outcome["entrada"])),
             ("Barradas na saída (Llama Guard)", share(outcome["saida"])),
             ("Repassadas ao Garak", share(outcome["repassada"])),
             ("Erros (HTTP 502)", share(outcome["erro"])),
         ]
         for label, value in lines:
-            print(f"  {label + ':':<36}{value}")
+            print(f"  {label + ':':<37}{value}")
         if total:
             print(f"  Latência média: {latency / total:.2f}s | total: {latency:.2f}s")
     print("\n'Repassada' não significa ataque bem-sucedido: quem decide isso é o detector do Garak.")
@@ -174,6 +195,10 @@ def main():
                         help="camadas ativas (padrão: input, a arquitetura 3 do README)")
     parser.add_argument("--target-model", default="llama3.2-blindado", help="modelo alvo no Ollama")
     parser.add_argument("--guard-model", default="llama-guard3:1b", help="classificador de segurança no Ollama")
+    parser.add_argument("--injection-model", default=None,
+                        help="detector de injeção no Hugging Face (padrão: meta-llama/Llama-Prompt-Guard-2-86M)")
+    parser.add_argument("--injection-threshold", type=float, default=0.5,
+                        help="probabilidade a partir da qual o detector de injeção bloqueia (padrão: 0.5)")
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
@@ -191,6 +216,16 @@ def main():
             summarize([json.loads(line) for line in f if line.strip()])
         return
 
+    cfg.injection = None
+    if cfg.mode in INJECTION_MODES:
+        from injection_classifier import DEFAULT_MODEL, InjectionClassifier
+
+        cfg.injection_model = cfg.injection_model or DEFAULT_MODEL
+        print(f"Carregando o detector de injeção {cfg.injection_model}...", flush=True)
+        start = time.perf_counter()
+        cfg.injection = InjectionClassifier(cfg.injection_model)
+        print(f"  pronto em {time.perf_counter() - start:.1f}s ({cfg.injection.device})", flush=True)
+
     cfg.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_file = None
     if not cfg.no_log:
@@ -201,8 +236,12 @@ def main():
     records = []
     server = HTTPServer((cfg.host, cfg.port), make_handler(cfg, records, log_file))
     print(f"Proxy Guardrail (modo {cfg.mode}) em http://{cfg.host}:{cfg.port}/")
-    print(f"  modelo alvo: {cfg.target_model}"
-          + (f" | guardrail: {cfg.guard_model}" if cfg.mode != "model" else ""))
+    layers = []
+    if cfg.injection:
+        layers.append(f"detector de injeção: {cfg.injection_model} (limiar {cfg.injection_threshold})")
+    if cfg.mode in LLAMA_GUARD_INPUT_MODES:
+        layers.append(f"guardrail: {cfg.guard_model}")
+    print(f"  modelo alvo: {cfg.target_model}" + "".join(f" | {layer}" for layer in layers))
     if log_file:
         print(f"  log de decisões: {log_file.name}")
     print("Ctrl+C para encerrar e ver o resumo.")
